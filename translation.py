@@ -5,22 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from deep_translator import GoogleTranslator
 
-language_codes = {
-    'es': 'Spanish',
-    'fr': 'French',
-    'ar': 'Arabic',
-    'el': 'Greek',
-    'de': 'German',
-    'it': 'Italian',
-    'pt': 'Portuguese',
-    'ru': 'Russian',
-    'zh': 'Chinese',
-    'ja': 'Japanese',
-    'id': 'Indonesian',
-    'hi': 'Hindi',
-    'bn': 'Bengali'
-}
-
 # Language code mapping for GoogleTranslator (use full names supported by Google Translate)
 LANG_CODES = {
     'es': 'spanish',
@@ -40,7 +24,6 @@ LANG_CODES = {
 
 CACHE_FILE = "translation_cache.json"
 LOG_INTERVAL = 50  # Save progress every 50 words
-PROGRESS_FILE = "translation_progress.txt"
 cache_lock = Lock()
 rate_limit_lock = Lock()
 last_request_time = 0.0
@@ -105,11 +88,11 @@ def translate_all_languages(word, word_index):
     results = {}
     
     # Translate sequentially through languages (but multiple words in parallel)
-    for lang in language_codes.keys():
+    for lang in LANG_CODES.keys():
         results[lang] = translate_word(word, lang)
     
     # Append in language order
-    for lang in language_codes.keys():
+    for lang in LANG_CODES.keys():
         row.append(results[lang])
     
     # Log progress and save cache periodically
@@ -120,13 +103,6 @@ def translate_all_languages(word, word_index):
         progress_msg = f"Progress: {word_index + 1:,}/{len(words):,} words | {translation_count:,} translated | ETA: {int(remaining/60)}m {int(remaining%60)}s"
         print(progress_msg)
         save_cache(translation_cache)
-        # Save progress to file for reference
-        with open(PROGRESS_FILE, "w") as f:
-            f.write(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Words processed: {word_index + 1:,}/{len(words):,}\n")
-            f.write(f"Total translations: {translation_count:,}\n")
-            f.write(f"Elapsed time: {int(elapsed/60)}m {int(elapsed%60)}s\n")
-            f.write(f"Estimated remaining: {int(remaining/60)}m {int(remaining%60)}s\n")
     
     return row
 
