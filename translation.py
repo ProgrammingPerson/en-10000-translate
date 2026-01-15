@@ -38,11 +38,18 @@ def load_cache():
             return {}
     return {}
 
-# Save cache to disk (thread-safe)
+# Save cache to disk (thread-safe, durable)
 def save_cache(cache):
+    """
+    Persist the cache safely.
+    We write to a temp file first and then replace to avoid corrupting the cache
+    if the process is interrupted while writing.
+    """
     with cache_lock:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        tmp_file = CACHE_FILE + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(dict(cache), f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, CACHE_FILE)
 
 def rate_limit(delay=0.1):
     """Enforce minimum delay between API requests."""
@@ -53,9 +60,15 @@ def rate_limit(delay=0.1):
             time.sleep(delay - elapsed)
         last_request_time = time.time()
 
-# Load or initialize cache
-translation_cache = load_cache()
-translation_count = 0
+def init_state():
+    """
+    Initialize mutable global state.
+    Kept in a helper so that importing this module for utilities doesn't
+    immediately do file I/O or reset counters.
+    """
+    global translation_cache, translation_count, start_time, words
+    translation_cache = load_cache()
+    translation_count = 0
 
 def translate_word(word, lang_code):
     """Translate word using GoogleTranslator with rate limiting."""
@@ -98,45 +111,53 @@ def translate_all_languages(word, word_index):
     # Log progress and save cache periodically
     if (word_index + 1) % LOG_INTERVAL == 0:
         elapsed = time.time() - start_time
-        rate = (word_index + 1) / elapsed
-        remaining = (len(words) - word_index - 1) / rate if rate > 0 else 0
-        progress_msg = f"Progress: {word_index + 1:,}/{len(words):,} words | {translation_count:,} translated | ETA: {int(remaining/60)}m {int(remaining%60)}s"
-        print(progress_msg)
+        rate = (word_index + 1) / elapsed if elapsed > 0 else 0
+        total = len(words)
+        remaining = (total - word_index - 1) / rate if rate > 0 else 0
+        progress_msg = (
+            f"Progress: {word_index + 1:,}/{total:,} words | "
+            f"{translation_count:,} translated | "
+            f"ETA: {int(remaining/60)}m {int(remaining%60)}s"
+        )
+        print(progress_msg, flush=True)
         save_cache(translation_cache)
     
     return row
 
-with open("google-10000-english.txt", "r", encoding="utf-8") as f:
-    words = f.read().splitlines()
+if __name__ == "__main__":
+    init_state()
 
-start_time = time.time()
+    with open("google-10000-english.txt", "r", encoding="utf-8") as f:
+        words = f.read().splitlines()
 
-print(f"Starting translation of {len(words):,} words...")
-cached_count = len(translation_cache)
-if cached_count > 0:
-    print(f"*** RESUMING FROM PREVIOUS SESSION ***")
-    print(f"Cache loaded with {cached_count:,} existing translations")
-    print(f"Remaining words to translate: {len(words) * 13 - cached_count:,}\n")
-else:
-    print(f"Cache is empty, starting fresh")
-    
-print(f"Using Google Translate API with parallel processing (~5 words at a time)")
-print(f"Rate limit: 0.1s between requests\n")
-print("This will take approximately 5-8 hours to complete")
-print(f"Progress is saved to cache every 50 words\n")
-print("Progress will update every 50 words...\n")
+    start_time = time.time()
 
-with open("words.csv", "w", encoding="utf-8") as output:
-    # Process multiple words in parallel
-    with ThreadPoolExecutor(max_workers=5) as word_executor:
-        futures = {word_executor.submit(translate_all_languages, word, i): word for i, word in enumerate(words)}
-        for future in as_completed(futures):
-            row = future.result()
-            output.write(",".join(row) + "\n")
+    print(f"Starting translation of {len(words):,} words...")
+    cached_count = len(translation_cache)
+    if cached_count > 0:
+        print(f"*** RESUMING FROM PREVIOUS SESSION ***")
+        print(f"Cache loaded with {cached_count:,} existing translations")
+        print(f"Remaining words to translate: {len(words) * 13 - cached_count:,}\n")
+    else:
+        print(f"Cache is empty, starting fresh")
+        
+    print(f"Using Google Translate API with parallel processing (~5 words at a time)")
+    print(f"Rate limit: 0.1s between requests\n")
+    print("This will take approximately 5-8 hours to complete")
+    print(f"Progress is saved to cache every 50 words\n")
+    print("Progress will update every 50 words...\n")
 
-# Final save
-save_cache(translation_cache)
-elapsed = time.time() - start_time
-print(f"\nDone! Total translations: {translation_count:,}/130,000")
-print(f"Time taken: {int(elapsed/60)}m {int(elapsed%60)}s")
-print(f"Cache saved to {CACHE_FILE} with {len(translation_cache):,} translations")
+    with open("words.csv", "w", encoding="utf-8", newline="") as output:
+        # Process multiple words in parallel
+        with ThreadPoolExecutor(max_workers=5) as word_executor:
+            futures = {word_executor.submit(translate_all_languages, word, i): word for i, word in enumerate(words)}
+            for future in as_completed(futures):
+                row = future.result()
+                output.write(",".join(row) + "\n")
+
+    # Final save
+    save_cache(translation_cache)
+    elapsed = time.time() - start_time
+    print(f"\nDone! Total translations: {translation_count:,}/{len(words) * len(LANG_CODES):,}")
+    print(f"Time taken: {int(elapsed/60)}m {int(elapsed%60)}s")
+    print(f"Cache saved to {CACHE_FILE} with {len(translation_cache):,} translations")
